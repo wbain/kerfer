@@ -1,0 +1,6 @@
+
+            <svg width="15" height="7" xmlns="http://www.w3.org/2000/svg">
+            <path d="M 1,1 l 5,5 l 0,-5 l -5,0 m 4,1 l 0,2 l -2,-2 l 2,0" id="triangle" fill="blue" />
+            <path d="M 7,1 l 5,0 l 0,5 l -5,0 z m 1,1 l 0,1 l 1,0 l 0,-1 z m 2,2 l 0,1 l 1,0 l 0,-1 z" id="square" fill="red" />
+            </svg>
+            
