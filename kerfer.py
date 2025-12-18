@@ -1,3 +1,4 @@
+import re
 import svgelements
 import math
 from typing import Optional
@@ -788,6 +789,9 @@ def main(argv: list[str] | None = None) -> int:
         if not input_path.exists():
             logger.error(f"Input file does not exist: {input_path}")
             return 2
+        
+        # Open the input SVG file as text and search it for the width attribute to parse the units at the end of the value
+        units = find_units(input_path)  
 
         logger.info(f"Loading SVG from {input_path}")
         try:
@@ -907,15 +911,133 @@ def main(argv: list[str] | None = None) -> int:
 
     # If output path specified, write modified SVG
     if args.output:
-        out_path = Path(args.output)
+        temp_out_file = args.output + ".tmp"
         try:
-            svg.write_xml(str(out_path))
-            logger.info(f"Wrote output SVG to {out_path}")
+            temp_out_file_path = Path(temp_out_file)
+            svg.write_xml(temp_out_file_path)
+            logger.info(f"Wrote temporary output SVG to {temp_out_file_path}")
         except Exception as e:
-            logger.error(f"Failed to write output SVG '{out_path}': {e}")
+            logger.error(f"Failed to write output SVG '{temp_out_file_path}': {e}")
             return 5
 
+        # Open the resulting SVG file as text and insert the correct units into the width and height attributes at the end of each
+        out_path = Path(args.output)
+        inject_units(units, temp_out_file_path, out_path)
+
+        # Remove the temporary output file
+        try:
+            temp_out_file_path.unlink()
+            logger.info(f"Removed temporary file {temp_out_file_path}")
+        except Exception as e:
+            logger.warning(f"Failed to remove temporary file {temp_out_file_path}: {e}")
+
     return 0
+
+
+def find_units(input_path: Path) -> str:
+    """
+    Find the units of the width attribute in an SVG file by searching line-by-line.
+    Args:
+        input_path (Path): The path to the SVG file.
+    Returns:
+        str: The units of the width attribute, or empty string if not found or unitless.
+    """
+    width_units = ''
+    
+    try:
+        with open(input_path, 'r', encoding='utf-8') as f:
+            for line in f:
+                # Search for width attribute in this line
+                width_attrib_match = re.search(r'width="([^"]+)"', line)
+                if width_attrib_match:
+                    width_val_str = width_attrib_match.group(1)
+                    logger.info(f"  SVG width value string: {width_val_str}")
+                    
+                    # Extract the units from the width value
+                    width_units_match = re.search(r'(\d+(\.\d+)?)\s*([a-zA-Z]+)', width_val_str)
+                    if width_units_match:
+                        width_units = width_units_match.group(3)
+                        logger.info(f"  SVG width units: {width_units}")
+                        return width_units
+                    else:
+                        logger.info("  SVG is unitless.")
+                    break
+        
+        if width_attrib_match is None:
+            logger.warning("  Unable to find width attribute in SVG file.")
+        elif width_units == '':
+            logger.info("  SVG is unitless.")
+    except Exception as e:
+        logger.error(f"  Error reading SVG file: {e}")
+    
+    return width_units
+
+
+def inject_units(units: str, in_path: Path, out_path: Path):
+    """
+    Inject the correct units into the width and height attributes of an SVG file by processing line-by-line.
+    Args:
+        units (str): The units to inject (e.g., 'mm', 'in', 'px').
+        in_path (Path): The path to the input SVG file.
+        out_path (Path): The path to the output SVG file.
+    """
+    width_updated = False
+    height_updated = False
+    
+    try:
+        with open(in_path, 'r', encoding='utf-8') as infile, \
+             open(out_path, 'w', encoding='utf-8') as outfile:
+            
+            for line in infile:
+                modified_line = line
+                
+                # Process width attribute if present in this line
+                if not width_updated and re.search(r'width="[^"]+"', line):
+                    width_match = re.search(r'width="([^"]+)"', line)
+                    if width_match:
+                        width_val_str = width_match.group(1)
+                        logger.info(f"  SVG width value string: {width_val_str}")
+                        
+                        # Inject units into width value
+                        new_width_val_str = f"{width_val_str}{units}"
+                        modified_line = re.sub(
+                            r'width="[^"]+"',
+                            f'width="{new_width_val_str}"',
+                            line
+                        )
+                        logger.info(f"  Updated SVG width units to {units}")
+                        width_updated = True
+                    else:
+                        logger.warning("  Unable to find width value in width attribute of SVG")
+                
+                # Process height attribute if present in this line
+                if not height_updated and re.search(r'height="[^"]+"', modified_line):
+                    height_match = re.search(r'height="([^"]+)"', modified_line)
+                    if height_match:
+                        height_val_str = height_match.group(1)
+                        logger.info(f"  SVG height value string: {height_val_str}")
+                        
+                        # Inject units into height value
+                        new_height_val_str = f"{height_val_str}{units}"
+                        modified_line = re.sub(
+                            r'height="[^"]+"',
+                            f'height="{new_height_val_str}"',
+                            modified_line
+                        )
+                        logger.info(f"  Updated SVG height units to {units}")
+                        height_updated = True
+                    else:
+                        logger.warning("  Unable to find height value in height attribute of SVG")
+                
+                outfile.write(modified_line)
+        
+        if not width_updated:
+            logger.warning("  Unable to find width attribute of SVG")
+        if not height_updated:
+            logger.warning("  Unable to find height attribute of SVG")
+    
+    except Exception as e:
+        logger.error(f"  Error processing SVG file: {e}")
 
 
 if __name__ == "__main__":
