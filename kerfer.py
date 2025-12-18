@@ -125,9 +125,13 @@ def break_apart(path: svgelements.Path) -> list[svgelements.Path]:
         list[svgelements.Path]: A list of subpaths.
     """
     subpaths = []
+    subpath_idx = 0
     for subpath in path.as_subpaths():
         new_path = svgelements.Path(subpath.d())
+        if path.id:
+            new_path.id = f"{path.id}_{subpath_idx}"
         subpaths.append(new_path)
+        subpath_idx += 1
     return subpaths
 
 
@@ -762,6 +766,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("-s", "--simplify", dest="do_simplify", action="store_true", help="Remove unnecessary points from paths to *simplify* them")
     parser.add_argument("-d", "--dilate", type=float, help="Perpendicular offset *dilation* distance (in same units as SVG)")
     parser.add_argument("-c", "--close", dest="do_close", action="store_true", help="Close open subpaths (add *Close* where endpoints match)")
+    parser.add_argument("-r", "--rebreak", dest="do_rebreak", action="store_true", help="Rebreak subpaths into separate paths")
     parser.add_argument("-a", "--all", dest="do_all", action="store_true", help="Default if no other processing specified: Do *all* the steps - line, zero-cull, simplify, dilate, close")
     parser.add_argument("-v", "--verbose", action="store_true", help="Enable debug logging")
 
@@ -783,6 +788,7 @@ def main(argv: list[str] | None = None) -> int:
         args.do_simplify = True
         args.dilate = 0.15
         args.do_close = True
+        args.do_rebreak = True
 
     if args.input:
         input_path = Path(args.input)
@@ -873,10 +879,26 @@ def main(argv: list[str] | None = None) -> int:
         num_old, num_new = break_apart_svg(svg)
         logger.info(f"  Broke {num_old} paths into {num_new} subpaths")
 
+        # Assign unique IDs to each path
+        path_idx = 0
+        for element in svg.elements():
+            if isinstance(element, svgelements.Path):
+                if not element.id:
+                    element.id = f"path_{path_idx}"
+                path_idx += 1
+
+        for element in svg.elements():
+            if isinstance(element, svgelements.Path):
+                logger.debug(f"    Path ID \"{element.id}\": {len(list(element.as_subpaths()))} subpaths")
+
     if args.do_nest:
         logger.info("Nesting subpaths")
         num_nested = nest_svg(svg)
         logger.info(f"  Nested {num_nested} paths into others")
+
+        for element in svg.elements():
+            if isinstance(element, svgelements.Path):
+                logger.debug(f"    Path ID \"{element.id}\": {len(list(element.as_subpaths()))} subpaths")
 
     if args.do_line:
         logger.info("Linifying subpaths (in-place)")
@@ -907,7 +929,56 @@ def main(argv: list[str] | None = None) -> int:
         num_replaced, num_total = close_svg(svg)
         logger.info(f"  Replaced {num_replaced} line segments with close commands in {num_total} subpaths")
 
+    stroke_width = str(args.dilate) if args.dilate else "1"
+    color_fill = svgelements.Color("none")
+    color_outer = svgelements.Color("#0000ff")  # blue
+    color_inner = svgelements.Color("#ff0000")  # red
+    color_orig = svgelements.Color("#00ff00")   # green
+
+    if args.do_rebreak:
+        logger.info("Rebreaking subpaths into separate paths")
+        num_old, num_new = break_apart_svg(svg)
+        logger.info(f"  Rebroke {num_old} paths into {num_new} subpaths")
+
+        for element in svg.elements():
+            if isinstance(element, svgelements.Path):
+                logger.info(f"    Path ID \"{element.id}\": {len(list(element.as_subpaths()))} subpaths")
+
+        # Assign styles to outer and inner paths
+        for element in svg.elements():
+            if isinstance(element, svgelements.Path):
+                if isinstance(element, svgelements.GraphicObject):
+                    element.fill = color_fill
+                    element.stroke_width = stroke_width
+                    if isinstance(element.id, str) and element.id.endswith("_0"):
+                        element.stroke = color_outer
+                    else:
+                        element.stroke = color_inner
+                else:
+                    logger.warning(f"Element ID \"{element.id}\" is not a GraphicObject, cannot assign style!")
+
+    # Assign original style to paths in original group
+    for element in group:
+        if isinstance(element, svgelements.Path):
+            element.fill = color_fill
+            element.stroke_width = stroke_width
+            element.stroke = color_orig
+
     svg.append(group)
+
+    # For each path in SVG, find its transform matrix and apply it to the path data, then remove the transform attribute
+    # Doesn't work: At this point, paths only have identity transforms.
+    # It appears that transforms get added automatically when file is written out.
+    # for element in svg.elements():
+    #     if isinstance(element, svgelements.Path):
+    #         if element.transform is not None:
+    #             logger.info(f"Applying transform to path \"{element.id}\"")
+    #             try:
+    #                 logger.info(f"  Transform before: {element.transform}")
+    #                 element.reify()
+    #                 logger.info(f"  Transform after: {element.transform}")
+    #             except Exception as e:
+    #                 logger.error(f"  Failed to apply transform to path \"{element.id}\": {e}")
 
     # If output path specified, write modified SVG
     if args.output:
