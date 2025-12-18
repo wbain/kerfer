@@ -720,23 +720,30 @@ def copy_and_group_all_paths(svg: svgelements.SVG, group_name: str):
     return new_group
 
 
-def generate_unique_output_path(input_path: Path, dilate: float) -> str:
+def generate_unique_output_path(input_path: Path, dilate: float, units: str) -> str:
     """
     Generates a unique output file path based on the input file path.
     Args:
         input_path (Path): The input file path.
         dilate (float): The dilation distance used in the output filename.
+        units (str): The units used in the output filename.
     Returns:
         str: The unique output file path.
     """
-    output_path = input_path.with_suffix(".offset.svg")
+    input_path_str = str(input_path)
+
+    dilated = f"{dilate}{units}" if dilate is not None else "0"
+
+    output_path_str = f"{input_path.stem}_d{dilated}.svg"
+    output_path = input_path.with_name(output_path_str)
+
     counter = 1
     while output_path.exists():
-        if dilate is not None:
-            output_path = input_path.with_name(f"{input_path.stem}_offset_{dilate}_{counter}").with_suffix(".svg")
-        else:
-            output_path = input_path.with_name(f"{input_path.stem}_offset_{counter}").with_suffix(".svg")
+        copy_suffix = "copy" if counter == 1 else f"copy{counter}"
+        output_path_str = f"{input_path.stem}_d{dilated}_{copy_suffix}.svg"
+        output_path = input_path.with_name(output_path_str)
         counter += 1
+
     return str(output_path)
 
 
@@ -790,7 +797,8 @@ def main(argv: list[str] | None = None) -> int:
         args.do_line = True
         args.do_zero_cull = True
         args.do_simplify = True
-        args.dilate = 0.15
+        if not args.dilate:
+            args.dilate = 0.15
         args.do_close = True
         args.do_rebreak = True
 
@@ -872,7 +880,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     
     if not args.output:
-        args.output = generate_unique_output_path(input_path, args.dilate)
+        args.output = generate_unique_output_path(input_path, args.dilate, units)
 
     group = copy_and_group_all_paths(svg, "original_paths")
 

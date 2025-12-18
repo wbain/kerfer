@@ -10,7 +10,8 @@
             "request": "launch",
             "program": "${file}",
             "console": "integratedTerminal",
-            "args": "-i \"D:\\Documents\\Laser designs\\Skip-bo_box_exported.svg\" -a -o \"D:\\Documents\\Laser designs\\Skip-bo_box_noxform.svg\"",
+            //"args": "-i D:\\Documents\\Laser_designs\\Skip-bo_box.svg -a",
+            "args": "-i D:\\Documents\\Laser_designs\\Skip-bo_box.svg -a -d 0.2",
         }
     ]
 }
