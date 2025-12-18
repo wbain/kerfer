@@ -773,13 +773,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("-b", "--break", dest="do_break", action="store_true", help="Break apart subpaths into separate paths")
     parser.add_argument("-n", "--nest", dest="do_nest", action="store_true", help="Nest subpaths into parent paths")
     parser.add_argument("-l", "--line", dest="do_line", action="store_true", help="Open closed subpaths (replace each Close with a *Line*)")
-    parser.add_argument("-z", "--zero_cull", dest="do_zero_cull", action="store_true", help="Removes *zero-length* segments from paths")
+    parser.add_argument("-z", "--zero_cull", dest="do_zero_cull", action="store_true", help="Remove *zero-length* segments from paths")
     parser.add_argument("-s", "--simplify", dest="do_simplify", action="store_true", help="Remove unnecessary points from paths to *simplify* them")
     parser.add_argument("-d", "--dilate", type=float, help="Perpendicular offset *dilation* distance (in same units as SVG)")
     parser.add_argument("-c", "--close", dest="do_close", action="store_true", help="Close open subpaths (add *Close* where endpoints match)")
-    parser.add_argument("-r", "--rebreak", dest="do_rebreak", action="store_true", help="Rebreak subpaths into separate paths")
-    parser.add_argument("-a", "--all", dest="do_all", action="store_true", help="Default if no other processing specified: Do *all* the steps - line, zero-cull, simplify, dilate, close")
-    parser.add_argument("-v", "--verbose", action="store_true", help="Enable debug logging")
+    parser.add_argument("-r", "--rebreak", dest="do_rebreak", action="store_true", help="Rebreak subpaths into separate paths for laser cutting")
+    parser.add_argument("-a", "--all", dest="do_all", action="store_true", help="Default if no other processing specified except dilation: Do *all* the steps - break, nest, line, zero-cull, simplify, dilate, close, rebreak")
+    parser.add_argument("-v", "--verbose", action="store_true", help="Enable debug loggin output")
 
     args = parser.parse_args(argv)
 
@@ -930,10 +930,10 @@ def main(argv: list[str] | None = None) -> int:
     if args.dilate is not None:
         try:
             offset_value = float(args.dilate)
-            logger.info(f"Offsetting SVG by {offset_value}")
+            logger.info(f"Dilating SVG by {offset_value}")
             dilate_svg(svg, offset_value)
         except Exception as e:
-            logger.error(f"  Offset failed: {e}")
+            logger.error(f"  Dilation failed: {e}")
             return 4
 
     if args.do_close:
@@ -954,7 +954,7 @@ def main(argv: list[str] | None = None) -> int:
 
         for element in svg.elements():
             if isinstance(element, svgelements.Path):
-                logger.info(f"    Path ID \"{element.id}\": {len(list(element.as_subpaths()))} subpaths")
+                logger.debug(f"    Path ID \"{element.id}\": {len(list(element.as_subpaths()))} subpaths")
 
     # Assign styles to outer and inner paths
     for element in svg.elements():
@@ -969,7 +969,7 @@ def main(argv: list[str] | None = None) -> int:
             else:
                 logger.warning(f"Element ID \"{element.id}\" is not a GraphicObject, cannot assign style!")
 
-    # Assign original style to paths in original group
+    # Assign a useful style to the group of original paths
     for element in group:
         if isinstance(element, svgelements.Path):
             element.fill = color_fill
