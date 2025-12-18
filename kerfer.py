@@ -2,6 +2,8 @@ import svgelements
 import math
 from typing import Optional
 import logging
+import argparse
+from pathlib import Path
 
 logging.basicConfig(level=logging.DEBUG, format="%(asctime)s %(levelname)s %(message)s")
 for h in logging.getLogger().handlers:
@@ -111,57 +113,263 @@ def calculate_is_path_clockwise(path: svgelements.Path) -> Optional[bool]:
 
 
 ##########################################################################################
-# Opening/Closing
+# Subpath operations
 
-def show_path_open_closed(path: svgelements.Path):
+def break_apart(path: svgelements.Path) -> list[svgelements.Path]:
     """
-    Shows whether subpaths in the path are open or closed.
+    Breaks apart a path into its constituent subpaths.
+    Args:
+        path (svgelements.Path): The path to break apart.
+    Returns:
+        list[svgelements.Path]: A list of subpaths.
+    """
+    subpaths = []
+    for subpath in path.as_subpaths():
+        new_path = svgelements.Path(subpath.d())
+        subpaths.append(new_path)
+    return subpaths
+
+
+def break_apart_svg(svg: svgelements.SVG) -> tuple[int, int]:
+    """
+    Breaks apart all paths in the SVG into their constituent subpaths.
+    Args:
+        svg (svgelements.SVG): The SVG to break apart.
+    Returns:
+        int: The number of new subpaths created.
+    """
+    new_paths = []
+    paths_to_delete = []
+    for element in svg.elements():
+        if isinstance(element, svgelements.Path):
+            paths = break_apart(element)
+            new_paths.extend(paths)
+            paths_to_delete.append(element)
+
+    for path in paths_to_delete:
+        svg.remove(path)
+
+    for path in new_paths:
+        svg.append(path)
+
+    return len(paths_to_delete), len(new_paths)
+
+
+def bounding_box_contains(container: svgelements.Path, contained: svgelements.Path) -> bool:
+    """
+    Checks if the bounding box of the contained path is completely within the bounding box of the container path.
+    Args:
+        container (svgelements.Path): The container path.
+        contained (svgelements.Path): The path to check.
+    Returns:
+        bool: True if the contained path's bounding box is within the container's, False otherwise.
+    """
+    container_bbox = container.bbox()
+    contained_bbox = contained.bbox()
+
+    if (container_bbox is None) or (contained_bbox is None):
+        logger.warning("bounding_box_contains: at least one of the bounding boxes is None!")
+        return False
+
+    return (contained_bbox[0] >= container_bbox[0] and
+            contained_bbox[2] <= container_bbox[2] and
+            contained_bbox[1] >= container_bbox[1] and
+            contained_bbox[3] <= container_bbox[3])
+
+
+def nest_paths(container: svgelements.Path, contained: svgelements.Path):
+    """
+    Combines two paths if the contained path's bounding box is completely within the container path's bounding box.
+    Args:
+        container (svgelements.Path): The container path.
+        contained (svgelements.Path): The path to combine.
+    """
+    # Nest contained into container if bounding box is within container's
+    for segment in contained:
+        container.append(segment)
+
+
+def nest_svg(svg: svgelements.SVG) -> int:
+    """
+    Combines subpaths within the SVG if their bounding boxes are completely within the bounding box of another subpath.
+    Args:
+        svg (svgelements.SVG): The SVG to nest.
+    Returns:
+        int: The number of paths nested.
+    """
+    paths_to_delete = []
+    for element in svg.elements():
+        if isinstance(element, svgelements.Path):
+            for other_element in svg.elements():
+                if isinstance(other_element, svgelements.Path) and (element != other_element):
+                    if bounding_box_contains(other_element, element):
+                        logger.debug(f"  Nesting path \"{element.id}\" into path \"{other_element.id}\"")
+                        nest_paths(other_element, element)
+                        paths_to_delete.append(element)
+                        break
+
+    for path in paths_to_delete:
+        svg.remove(path)
+
+    return len(paths_to_delete)
+
+
+##########################################################################################
+# Uniquifying/Simplifying
+
+def zero_cull_path(path: svgelements.Path) -> int:
+    """
+    Removes zero-length segments from a subpaths in the path, in-place.
     Args:
         path (svgelements.Path): The path object to process.
+    Returns:
+        int: The number of zero-length segments removed.
     """
-    logger.debug(f"  Showing open/closed for path \"{path.id}\"")
+    logger.debug(f"  Deduplicating path \"{path.id}\"")
+    path_segs_to_delete = []
     subpath_idx = -1
     for subpath in path.as_subpaths():
         subpath_idx += 1
 
-        # iterate to find start and final segment of subpath
-        subpath_start_seg = None
-        for seg in subpath:
-            if subpath_start_seg is None:
-                subpath_start_seg = seg
-            subpath_final_seg = seg
+        subpath_seg_idx = -1
+        for segment in subpath:
+            subpath_seg_idx += 1
 
-        if isinstance(subpath_final_seg, svgelements.Close):
-            logger.debug(f"    Subpath {subpath_idx} closed")
-            # logger.debug(f"        {subpath.d()}")
-        elif isinstance(subpath_final_seg, svgelements.Line):
-            logger.debug(f"    Subpath {subpath_idx} open")
-            # logger.debug(f"      {subpath.d()}")
-        else:
-            logger.warning(f"    Subpath {subpath_idx} final segment is neither a line or a close!")
+            if isinstance(segment, svgelements.Move):
+                continue
+
+            if segment.start == segment.end:
+                if isinstance(segment, svgelements.Line):
+                    path_segs_to_delete.append(subpath.index_to_path_index(subpath_seg_idx))
+                elif isinstance(segment, svgelements.Close):
+                    path_segs_to_delete.append(subpath.index_to_path_index(subpath_seg_idx - 1))
+    
+    for seg_idx in reversed(path_segs_to_delete):
+        del path[seg_idx]
+
+    return len(path_segs_to_delete)
 
 
-def show_svg_open_closed(svg: svgelements.SVG):
+def zero_cull_svg(svg: svgelements.SVG) -> int:
     """
-    Shows whether subpaths in the SVG are open or closed.
+    Removes zero-length segments from all subpaths in the SVG, in-place.
     Args:
         svg (svgelements.SVG): The SVG object to process.
+    Returns:
+        int: The number of zero-length segments removed.
     """
-    logger.debug("Showing open/closed for SVG")
+    logger.debug("Uniquifying SVG")
+    num_culled = 0
     for element in svg.elements():
         if isinstance(element, svgelements.Path):
-            show_path_open_closed(element)
+            num_culled += zero_cull_path(element)
+
+    return num_culled
 
 
-def open_path(path: svgelements.Path):
+def are_collinear(seg1: svgelements.Linear, seg2: svgelements.Linear) -> bool:
     """
-    Opens all subpaths in the SVG, in-place, by replacing close commands with line segments.
+    Checks if two linear segments are collinear.
+    Args:
+        seg1 (svgelements.Linear): The first segment.
+        seg2 (svgelements.Linear): The second segment.
+    Returns:
+        bool: True if the segments are collinear, False otherwise.
+    """
+    if (not seg1.start) or (not seg1.end) or (not seg2.start) or (not seg2.end):
+        logger.warning("are_collinear: at least one of the segments has no start or end point!")
+        return False
+    
+    if (not seg1.start.x) or (not seg1.start.y) or (not seg1.end.x) or (not seg1.end.y) or \
+            (not seg2.start.x) or (not seg2.start.y) or (not seg2.end.x) or (not seg2.end.y):
+        logger.warning("are_collinear: at least one of the segment endpoints has no x or y value!")
+        return False
+    
+    # Calculate vectors from start to end for both segments
+    v1_x = seg1.end.x - seg1.start.x
+    v1_y = seg1.end.y - seg1.start.y
+    v2_x = seg2.end.x - seg2.start.x
+    v2_y = seg2.end.y - seg2.start.y
+
+    # Calculate the cross product of the two vectors
+    cross_product = v1_x * v2_y - v1_y * v2_x
+
+    # If the cross product is close to zero, the segments are collinear
+    return math.isclose(cross_product, 0, rel_tol=1e-6)
+
+
+def simplify_path(path: svgelements.Path) -> int:
+    """
+    Simplifies a path by removing collinear segments, in-place.
     Args:
         path (svgelements.Path): The path object to process.
+    Returns:
+        int: The number of collinear segments removed.
     """
-    logger.debug(f"  Opening path \"{path.id}\"")
+    logger.debug(f"  Simplifying path \"{path.id}\"")
+    path_segs_to_delete = []
     subpath_idx = -1
     for subpath in path.as_subpaths():
+        subpath_idx += 1
+
+        subpath_seg_idx = -1
+        for segment in subpath:
+            subpath_seg_idx += 1
+
+            if isinstance(segment, svgelements.Move):
+                # logger.debug(f"      Skipping initial move segment")
+                continue
+            elif subpath_seg_idx == 1:
+                # logger.debug(f"      Skipping first segment after initial move")
+                continue
+
+            prev_seg = subpath[subpath_seg_idx - 1]
+
+            if are_collinear(segment, prev_seg):
+                segment.start = prev_seg.start    # extend current segment backward
+                # Make sure the previous gets removed later
+                path_segs_to_delete.append(subpath.index_to_path_index(subpath_seg_idx - 1))
+    
+    for seg_idx in reversed(path_segs_to_delete):
+        del path[seg_idx]
+
+    return len(path_segs_to_delete)
+
+
+def simplify_svg(svg: svgelements.SVG) -> int:
+    """
+    Simplifies all paths in the SVG by removing collinear segments, in-place.
+    Args:
+        svg (svgelements.SVG): The SVG object to process.
+    Returns:
+        int: The number of collinear segments removed.
+    """
+    logger.debug("Simplifying SVG")
+    num_simplified = 0
+    for element in svg.elements():
+        if isinstance(element, svgelements.Path):
+            num_simplified += simplify_path(element)
+
+    return num_simplified
+
+
+##########################################################################################
+# Linifying/Closing
+
+def linify_path(path: svgelements.Path) -> tuple[int, int]:
+    """
+    Linifies all subpaths in the SVG, in-place, by replacing close commands with line segments.
+    Args:
+        path (svgelements.Path): The path object to process.
+    Returns:
+        tuple[int, int]: The number of close commands that were replaced with lines, and the total number of subpaths.
+    """
+    logger.debug(f"  Linifying path \"{path.id}\"")
+    num_total = 0
+    num_replaced = 0
+    subpath_idx = -1
+    for subpath in path.as_subpaths():
+        num_total += 1
         subpath_idx += 1
 
         found_close = False
@@ -172,41 +380,56 @@ def open_path(path: svgelements.Path):
 
             if isinstance(segment, svgelements.Close):
                 found_close = True
-                logger.debug(f"    Opening subpath {subpath_idx}")
+                logger.debug(f"    Linifying subpath {subpath_idx}")
                 # replace close with line segment
                 start = segment.start
                 end = segment.end
                 path_seg_idx = subpath.index_to_path_index(subpath_seg_idx)
                 del path[path_seg_idx]
                 path.insert(path_seg_idx, svgelements.Line(start, end))
+                num_replaced += 1
             
         if not found_close:
-            logger.debug(f"    Subpath {subpath_idx} already open")
+            logger.debug(f"    Subpath {subpath_idx} already ends with line segment")
 
+    return num_replaced, num_total
+            
 
-def open_svg(svg: svgelements.SVG):
+def linify_svg(svg: svgelements.SVG) -> tuple[int, int]:
     """
-    Opens all subpaths in the SVG, in-place, by replacing close commands with line segments.
+    Linifies all subpaths in the SVG, in-place, by replacing close commands with line segments.
     Args:
         svg (svgelements.SVG): The SVG object to process.
+    Returns:
+        tuple[int, int]: The number of close commands that were replaced with lines, and the total number of subpaths.
     """
-    logger.debug("Opening SVG")
+    logger.debug("Linifying SVG")
+    num_total = 0
+    num_replaced = 0
     for element in svg.elements():
         if isinstance(element, svgelements.Path):
-            open_path(element)
+            r, t = linify_path(element)
+            num_replaced += r
+            num_total += t
+
+    return num_replaced, num_total
 
 
-def close_path(path: svgelements.Path):
+def close_path(path: svgelements.Path) -> tuple[int, int]:
     """
     Closes all subpaths in the SVG, in-place, by replacing final line segments with close commands.
     Args:
         path (svgelements.Path): The path object to process.
+    Returns:
+        tuple[int, int]: The number of line segments that were replaced with close commands, and the total number of subpaths.
     """
     logger.debug(f"  Closing path \"{path.id}\"")
-    # logger.debug(f"  {path.d()}")
+    num_total = 0
+    num_replaced = 0
     subpath_idx = -1
     for subpath in path.as_subpaths():
         subpath_idx += 1
+        num_total += 1
 
         logger.debug(f"    Closing subpath {subpath_idx}")
         # logger.debug(f"      {subpath.d()}")
@@ -249,26 +472,36 @@ def close_path(path: svgelements.Path):
         try:
             del path[seg_end_path_idx]
             path.insert(seg_end_path_idx, svgelements.Close())
+            num_replaced += 1
         except Exception as e:
             logger.error(f"      Failed to close subpath {subpath_idx}! {e}")
             # logger.error(f"        {subpath.d()}")
 
+    return num_replaced, num_total
 
 
-def close_svg(svg: svgelements.SVG):
+def close_svg(svg: svgelements.SVG) -> tuple[int, int]:
     """
     Closes all subpaths in the SVG, in-place, by replacing final line segments with close commands.
     Args:
         svg (svgelements.SVG): The SVG object to process.
+    Returns:
+        tuple[int, int]: The number of line segments that were replaced with close commands, and the total number of subpaths.
     """
     logger.debug(f"Closing SVG")
+    num_total = 0
+    num_replaced = 0
     for element in svg.elements():
         if isinstance(element, svgelements.Path):
-            close_path(element)
+            r, t = close_path(element)
+            num_replaced += r
+            num_total += t
+
+    return num_replaced, num_total
 
 
 ##########################################################################################
-# Offsetting
+# Dilating
 
 def offset_endpoints(p1: svgelements.Point, p2: svgelements.Point, offset_distance: float):
     """
@@ -379,7 +612,7 @@ def offset_line_segment(seg: svgelements.Linear, offset_distance: float) -> svge
     return svgelements.Line(endpoints[0], endpoints[1])
 
 
-def offset_subpath(subpath: svgelements.Subpath, offset_dist: float):
+def dilate_subpath(subpath: svgelements.Subpath, offset_dist: float):
     """
     Offsets a subpath by a given distance. Modifies the subpath in-place.
     Args:
@@ -433,7 +666,7 @@ def offset_subpath(subpath: svgelements.Subpath, offset_dist: float):
             seg_end_intersection_idx += 1
 
 
-def offset_path(path: svgelements.Path, offset_dist: float):
+def dilate_path(path: svgelements.Path, offset_dist: float):
     """
     Offsets a path by a given distance. Modifies the subpaths in-place.
     Args:
@@ -444,10 +677,10 @@ def offset_path(path: svgelements.Path, offset_dist: float):
     dist = offset_dist if is_clockwise else -offset_dist
     logger.debug(f"  Offsetting path \"{path.id}\": {'clockwise' if is_clockwise else 'counter-clockwise'} => {dist}") # : {path.d()}
     for subpath in path.as_subpaths():
-        offset_subpath(subpath, dist)
+        dilate_subpath(subpath, dist)
 
 
-def offset_svg(svg: svgelements.SVG, offset_dist: float):
+def dilate_svg(svg: svgelements.SVG, offset_dist: float):
     """
     Offsets all the paths in an SVG by a given distance. Modifies the paths in-place.
     Args:
@@ -457,14 +690,45 @@ def offset_svg(svg: svgelements.SVG, offset_dist: float):
     logger.debug(f"Offsetting SVG")
     for element in svg.elements():
         if isinstance(element, svgelements.Path):
-            offset_path(element, offset_dist)
+            dilate_path(element, offset_dist)
 
-               
+
 ##########################################################################################
+# Miscellaneous
 
-import argparse
-import sys
-from pathlib import Path
+def copy_and_group_all_paths(svg: svgelements.SVG, group_name: str):
+    """
+    Copies and groups all paths in an SVG into a single group with the given name.
+    Args:
+        svg (svgelements.SVG): The SVG to process.
+        group_name (str): The name of the group to create.
+    Returns:
+        svgelements.Group: The new group containing all paths.
+    """
+    logger.debug(f"Copying and grouping all paths in SVG into group \"{group_name}\"")
+    new_group = svgelements.Group()
+    new_group.id = group_name
+    for element in svg.elements():
+        if isinstance(element, svgelements.Path):
+            # new_group.append(element.copy())
+            new_group.append(svgelements.Path(element))
+    return new_group
+
+
+def generate_unique_output_path(input_path: Path) -> str:
+    """
+    Generates a unique output file path based on the input file path.
+    Args:
+        input_path (Path): The input file path.
+    Returns:
+        str: The unique output file path.
+    """
+    output_path = input_path.with_suffix(".offset.svg")
+    counter = 1
+    while output_path.exists():
+        output_path = input_path.with_name(f"{input_path.stem}_offset_{counter}").with_suffix(".svg")
+        counter += 1
+    return str(output_path)
 
 
 def _print_summary(svg: svgelements.SVG):
@@ -483,13 +747,21 @@ def _print_summary(svg: svgelements.SVG):
                 print(f"  Subpath {subpath_idx}: {num_segs} segments {"clockwise" if is_clockwise else "counter-clockwise" if is_clockwise is not None else "undetermined"}, {'closed' if is_closed else 'open'}")
 
 
+##########################################################################################
+# Main
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="kerfer — SVG path offsetting to account for kerf")
     parser.add_argument("-i", "--input", help="Input SVG file path")
-    parser.add_argument("-o", "--output", help="Output SVG file path (writes modified SVG)")
-    parser.add_argument("--open", dest="do_open", action="store_true", help="Open closed subpaths (replace Close with Line)")
-    parser.add_argument("--close", dest="do_close", action="store_true", help="Close open subpaths (add Close where endpoints match)")
-    parser.add_argument("--offset", type=float, help="Perpendicular offset distance (in same units as SVG)")
+    parser.add_argument("-o", "--output", help="Optional: Output SVG file path (writes modified SVG)")
+    parser.add_argument("-b", "--break", dest="do_break", action="store_true", help="Break apart subpaths into separate paths")
+    parser.add_argument("-n", "--nest", dest="do_nest", action="store_true", help="Nest subpaths into parent paths")
+    parser.add_argument("-l", "--line", dest="do_line", action="store_true", help="Open closed subpaths (replace each Close with a *Line*)")
+    parser.add_argument("-z", "--zero_cull", dest="do_zero_cull", action="store_true", help="Removes *zero-length* segments from paths")
+    parser.add_argument("-s", "--simplify", dest="do_simplify", action="store_true", help="Remove unnecessary points from paths to *simplify* them")
+    parser.add_argument("-d", "--dilate", type=float, help="Perpendicular offset *dilation* distance (in same units as SVG)")
+    parser.add_argument("-c", "--close", dest="do_close", action="store_true", help="Close open subpaths (add *Close* where endpoints match)")
+    parser.add_argument("-a", "--all", dest="do_all", action="store_true", help="Default if no other processing specified: Do *all* the steps - line, zero-cull, simplify, dilate, close")
     parser.add_argument("-v", "--verbose", action="store_true", help="Enable debug logging")
 
     args = parser.parse_args(argv)
@@ -498,6 +770,18 @@ def main(argv: list[str] | None = None) -> int:
         logger.setLevel(logging.DEBUG)
     else:
         logger.setLevel(logging.INFO)
+
+    if not args.do_break and not args.do_nest and not args.do_line and not args.do_zero_cull and not args.do_simplify and not args.dilate and not args.do_close:
+        args.do_all = True
+
+    if args.do_all:
+        args.do_break = True
+        args.do_nest = True
+        args.do_line = True
+        args.do_zero_cull = True
+        args.do_simplify = True
+        args.dilate = 0.15
+        args.do_close = True
 
     if args.input:
         input_path = Path(args.input)
@@ -516,53 +800,112 @@ def main(argv: list[str] | None = None) -> int:
         with open("test_output/test_a.svg", "w") as f:
             f.write("""
             <svg width="15" height="7" xmlns="http://www.w3.org/2000/svg">
-            <path d="M 1,1 l 5,5 l 0,-5 l -5,0 m 4,1 l 0,2 l -2,-2 l 2,0" id="triangle" fill="blue" />
-            <path d="M 7,1 l 5,0 l 0,5 l -5,0 z m 1,1 l 0,1 l 1,0 l 0,-1 z m 2,2 l 0,1 l 1,0 l 0,-1 z" id="square" fill="red" />
+            <path d="M 1,1 l 2,2 l 2,2 l 1,1 l 0,-5 l -3,0 l -2,0 m 4,1 l 0,2 l -1,-1 l -1,-1 l 2,0" id="triangle" fill="blue" />
+            <path d="M 7,1 l 5,0 l 0,2 l 0,3 l -5,0 z m 1,1 l 0,1 l 0,0 l 1,0 l 0,-1 z m 2,2 l 0,1 l 1,0 l 0,-1 z" id="square" fill="red" />
             </svg>
             """)
         svg = svgelements.SVG.parse("test_output/test_a.svg")
 
-        _print_summary(svg)
+        # _print_summary(svg)
 
         print()
-        print("Testing open...")
-        open_svg(svg)
-        svg.write_xml("test_output/test_b_opened.svg")
-        _print_summary(svg)
-        
-        offset_dist = 0.25
+        print("Testing break apart...")
+        num_old, num_new = break_apart_svg(svg)
+        logger.info(f"  Broke {num_old} paths into {num_new} subpaths")
+        svg.write_xml("test_output/test_b_broken.svg")
+        # _print_summary(svg)
+
         print()
-        print(f"Testing offset {offset_dist}...")
-        offset_svg(svg, offset_dist)
-        svg.write_xml(f"test_output/test_c_offset_{offset_dist}.svg")
-        _print_summary(svg)
+        print("Testing nest...")
+        num_nested = nest_svg(svg)
+        logger.info(f"  Nested {num_nested} paths into others")
+        svg.write_xml("test_output/test_c_nested.svg")
+        # _print_summary(svg)
+
+        print()
+        print("Testing linify...")
+        num_replaced, num_total = linify_svg(svg)
+        logger.info(f"  Replaced {num_replaced} close commands with lines in {num_total} subpaths")
+        svg.write_xml("test_output/test_d_linified.svg")
+        # _print_summary(svg)
+        
+        print()
+        print("Testing zero-cull...")
+        num_culled = zero_cull_svg(svg)
+        logger.info(f"  Removed {num_culled} zero-length segments")
+        svg.write_xml("test_output/test_e_zero_culled.svg")
+        # _print_summary(svg)
+
+        print()
+        print("Testing simplify...")
+        num_simplified = simplify_svg(svg)
+        logger.info(f"  Removed {num_simplified} collinear segments")
+        svg.write_xml("test_output/test_f_simplified.svg")
+        # _print_summary(svg)
+
+        print()
+        print(f"Testing dilate {args.dilate}...")
+        dilate_svg(svg, args.dilate)
+        svg.write_xml(f"test_output/test_g_dilated_{args.dilate}.svg")
+        # _print_summary(svg)
 
         print()
         print("Testing close...")
-        close_svg(svg)
-        svg.write_xml("test_output/test_d_closed.svg")
-        _print_summary(svg)
+        num_replaced, num_total = close_svg(svg)
+        logger.info(f"  Replaced {num_replaced} line segments with close commands in {num_total} subpaths")
+        svg.write_xml("test_output/test_h_closed.svg")
+        # _print_summary(svg)
         return 0
     
-    # Perform operations in a sensible order: open -> offset -> close
-    if args.do_open:
-        logger.info("Opening subpaths (in-place)")
-        open_svg(svg)
+    if not args.output:
+        args.output = generate_unique_output_path(input_path)
 
-    if args.offset is not None:
+    group = copy_and_group_all_paths(svg, "original_paths")
+
+    # Perform operations in a sensible order: break -> line -> zero_cull -> simplify -> offset -> close
+
+    if args.do_break:
+        logger.info("Breaking apart subpaths")
+        num_old, num_new = break_apart_svg(svg)
+        logger.info(f"  Broke {num_old} paths into {num_new} subpaths")
+
+    if args.do_nest:
+        logger.info("Nesting subpaths")
+        num_nested = nest_svg(svg)
+        logger.info(f"  Nested {num_nested} paths into others")
+
+    if args.do_line:
+        logger.info("Linifying subpaths (in-place)")
+        num_replaced, num_total = linify_svg(svg)
+        logger.info(f"  Replaced {num_replaced} close commands with lines in {num_total} subpaths")
+
+    if args.do_zero_cull:
+        logger.info("Zero-culling subpaths (in-place)")
+        num_culled = zero_cull_svg(svg)
+        logger.info(f"  Removed {num_culled} zero-length segments")
+
+    if args.do_simplify:
+        logger.info("Simplifying subpaths (in-place)")
+        num_simplified = simplify_svg(svg)
+        logger.info(f"  Removed {num_simplified} collinear segments")
+
+    if args.dilate is not None:
         try:
-            offset_value = float(args.offset)
+            offset_value = float(args.dilate)
             logger.info(f"Offsetting SVG by {offset_value}")
-            offset_svg(svg, offset_value)
+            dilate_svg(svg, offset_value)
         except Exception as e:
-            logger.error(f"Offset failed: {e}")
+            logger.error(f"  Offset failed: {e}")
             return 4
 
     if args.do_close:
         logger.info("Closing subpaths (in-place)")
-        close_svg(svg)
+        num_replaced, num_total = close_svg(svg)
+        logger.info(f"  Replaced {num_replaced} line segments with close commands in {num_total} subpaths")
 
-    # If output path specified, write modified SVG; otherwise print a summary
+    svg.append(group)
+
+    # If output path specified, write modified SVG
     if args.output:
         out_path = Path(args.output)
         try:
