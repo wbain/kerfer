@@ -334,7 +334,19 @@ def simplify_path(path: svgelements.Path) -> int:
                 segment.start = prev_seg.start    # extend current segment backward
                 # Make sure the previous gets removed later
                 path_segs_to_delete.append(subpath.index_to_path_index(subpath_seg_idx - 1))
-    
+
+        # lastly, check whether final segment is collinear with first segment
+        if subpath_seg_idx > 0:
+            first_seg = subpath[1]
+            final_seg = subpath[-1]
+            if are_collinear(first_seg, final_seg):
+                # logger.debug(f"    Removing collinear final segment")
+                move_seg = subpath[0]
+                first_seg.start = final_seg.start   # extend first segment backward
+                move_seg.end = final_seg.end        # relocate move command to first segment's new start
+                # Make sure final segment gets removed later
+                path_segs_to_delete.append(subpath.index_to_path_index(subpath_seg_idx))
+
     for seg_idx in reversed(path_segs_to_delete):
         del path[seg_idx]
 
@@ -681,7 +693,11 @@ def dilate_path(path: svgelements.Path, offset_dist: float):
     is_clockwise = calculate_is_path_clockwise(path)
     dist = offset_dist if is_clockwise else -offset_dist
     logger.debug(f"  Offsetting path \"{path.id}\": {'clockwise' if is_clockwise else 'counter-clockwise'} => {dist}") # : {path.d()}
+    subpath_idx = -1
     for subpath in path.as_subpaths():
+        subpath_idx += 1
+        if path.id == "path_6" and subpath_idx == 2:
+            logger.info(f"    Subpath {subpath_idx} before dilate: {subpath.d()}")
         dilate_subpath(subpath, dist)
 
 
