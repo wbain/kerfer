@@ -26,34 +26,37 @@ Normal sequence of operation is open, offset, and then close.
 
 - **Flags**:
 	- `-i, --input`: Input SVG file path. If none provided, then a small test file is generated.
-	- `--open`: Open closed subpaths (replace `Close` segments with `Line`).
-	- `--offset`: Floating-point offset distance (same units as the SVG). Example: `--offset 0.15`.
-	- `--close`: Close open subpaths (replace final `Line` of each segment with a `Close` when subpath endpoints match).
-	- `-o, --output`: Write modified SVG to this path. If omitted the script prints a short summary to stdout.
+	- `-o, --output`: Write modified SVG to this path. If omitted, the script generates a unique filename that includes the dilation amount.
+	- `-b, --break`: Break apart subpaths into separate paths
+	- `-n, --nest`: Nest subpaths into parent paths
+	- `-l, --line`: Open closed subpaths (replace each Close with a *Line*)
+	- `-z, --zero_cull`: Removes *zero-length* segments from paths
+	- `-s, --simplify`: Remove unnecessary points from paths to *simplify* them
+	- `-d, --dilate`: Perpendicular offset *dilation* distance (in same units as SVG)
+	- `-c, --close`: Close open subpaths (replace final `Line` of each subpath with a `Close` when subpath endpoints match).
+	- `-r, --rebreak`: Rebreak subpaths into separate paths for laser cutting
+	- `-a, --all`: Default if no other processing specified except dilation: Do *all* the steps - break, nest, line, zero-cull, simplify, dilate, close, rebreak
 	- `-v, --verbose`: Enable debug logging output.
 
-- **Operation order**: When multiple operations are given they are applied in this order: `--open` -> `--offset` -> `--close`.
+- **Operation order**: When multiple operations are given they are applied in this order: break, nest, line, zero-cull, simplify, dilate, close, rebreak.
 
 - **Examples**:
 
 ```powershell
-# Print a summary of the SVG (no file written)
-.\.venv\Scripts\python.exe .\kerfer.py -i "D:\Projects\kerfer\box_asploded.svg"
-
 # Open, offset by 0.15 units, and write to output.svg
-.\.venv\Scripts\python.exe .\kerfer.py -i "input.svg" -o "output.svg" --open --offset 0.15
+.\.venv\Scripts\python.exe .\kerfer.py -i "input.svg" -a -d 0.15 -o "output.svg"
 
-# Close only, verbose logging enabled
-.\.venv\Scripts\python.exe .\kerfer.py -i "input.svg" -o "closed.svg" --close -v
+# Open, offset by 0.2 units, and write to output_d0.2mm.svg (if input has mm for units)
+.\.venv\Scripts\python.exe .\kerfer.py -i "input.svg" -a -d 0.15
 ```
 
 **Development notes**
-- **Code structure**: Top-level functions provide the main functionality: `calculate_is_clockwise`, `open_svg`/`close_svg`, and `offset_svg`.
+- **Code structure**: Top-level functions provide the main functionality: e.g., `open_svg`, `dilate_svg`, and `close_svg`.
 - **Limitations**: Curved segments (`CubicBezier`, `QuadraticBezier`, `Arc`) are currently treated only by their endpoints for area/offset calculations — full-curve handling requires sampling or analytic integration.
-- **Testing**: There are no automated tests included. To experiment, create a small test `SVG` and use `svgelements.SVG.parse()` as shown in `kerfer.py`.
+- **Testing**: Automated tests included. To demonstrate, run the app with no imput file specified; a small test SVG will be created and processed, with each intermediate result written to a test output directory.
 
 **Contributing**
-- **Suggestions**: If you want better curve handling, consider sampling bezier/arc segments or using a geometry library to compute exact curve contributions to signed area and offsetting.
+- **Suggestions**: For curve handling, consider sampling bezier/arc segments or using a geometry library to compute exact curve contributions to signed area and offsetting.
 
 **License**
 - This project is released under the MIT License — see the `LICENSE` file included in the repository.
