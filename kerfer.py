@@ -720,18 +720,22 @@ def copy_and_group_all_paths(svg: svgelements.SVG, group_name: str):
     return new_group
 
 
-def generate_unique_output_path(input_path: Path) -> str:
+def generate_unique_output_path(input_path: Path, dilate: float) -> str:
     """
     Generates a unique output file path based on the input file path.
     Args:
         input_path (Path): The input file path.
+        dilate (float): The dilation distance used in the output filename.
     Returns:
         str: The unique output file path.
     """
     output_path = input_path.with_suffix(".offset.svg")
     counter = 1
     while output_path.exists():
-        output_path = input_path.with_name(f"{input_path.stem}_offset_{counter}").with_suffix(".svg")
+        if dilate is not None:
+            output_path = input_path.with_name(f"{input_path.stem}_offset_{dilate}_{counter}").with_suffix(".svg")
+        else:
+            output_path = input_path.with_name(f"{input_path.stem}_offset_{counter}").with_suffix(".svg")
         counter += 1
     return str(output_path)
 
@@ -868,7 +872,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     
     if not args.output:
-        args.output = generate_unique_output_path(input_path)
+        args.output = generate_unique_output_path(input_path, args.dilate)
 
     group = copy_and_group_all_paths(svg, "original_paths")
 
