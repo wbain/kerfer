@@ -876,7 +876,7 @@ def main(argv: list[str] | None = None) -> int:
 
     group = copy_and_group_all_paths(svg, "original_paths")
 
-    # Perform operations in a sensible order: break -> line -> zero_cull -> simplify -> offset -> close
+    # Perform operations in a sensible order: break -> line -> zero_cull -> simplify -> offset -> close -> rebreak
 
     if args.do_break:
         logger.info("Breaking apart subpaths")
@@ -948,18 +948,18 @@ def main(argv: list[str] | None = None) -> int:
             if isinstance(element, svgelements.Path):
                 logger.info(f"    Path ID \"{element.id}\": {len(list(element.as_subpaths()))} subpaths")
 
-        # Assign styles to outer and inner paths
-        for element in svg.elements():
-            if isinstance(element, svgelements.Path):
-                if isinstance(element, svgelements.GraphicObject):
-                    element.fill = color_fill
-                    element.stroke_width = stroke_width
-                    if isinstance(element.id, str) and element.id.endswith("_0"):
-                        element.stroke = color_outer
-                    else:
-                        element.stroke = color_inner
+    # Assign styles to outer and inner paths
+    for element in svg.elements():
+        if isinstance(element, svgelements.Path):
+            if isinstance(element, svgelements.GraphicObject):
+                element.fill = color_fill
+                element.stroke_width = stroke_width
+                if isinstance(element.id, str) and element.id.endswith("_0"):
+                    element.stroke = color_outer
                 else:
-                    logger.warning(f"Element ID \"{element.id}\" is not a GraphicObject, cannot assign style!")
+                    element.stroke = color_inner
+            else:
+                logger.warning(f"Element ID \"{element.id}\" is not a GraphicObject, cannot assign style!")
 
     # Assign original style to paths in original group
     for element in group:
