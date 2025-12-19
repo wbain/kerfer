@@ -33,7 +33,7 @@ Normal sequence of operation is open, offset, and then close.
 	- `-z, --zero_cull`: Removes *zero-length* segments from paths
 	- `-s, --simplify`: Remove unnecessary points from paths to *simplify* them
 	- `-d, --dilate`: Perpendicular offset *dilation* distance (in same units as SVG)
-	- `-c, --close`: Close open subpaths (replace final `Line` of each subpath with a `Close` when subpath endpoints match).
+	- `-c, --close`: Close open subpaths (replace final Line of each subpath with a *Close* when subpath endpoints match).
 	- `-r, --rebreak`: Rebreak subpaths into separate paths for laser cutting
 	- `-a, --all`: Default if no other processing specified except dilation: Do *all* the steps - break, nest, line, zero-cull, simplify, dilate, close, rebreak
 	- `-v, --verbose`: Enable debug logging output.
