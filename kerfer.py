@@ -25,20 +25,29 @@ class Point:
 class SimpleShape:
     points: List[Point] = field(default_factory=list)
     attributes: dict[str, str] = field(default_factory=dict)
+    id: str = field(default_factory=str)
 
 
 # Data class to represent a compound shape as a list of simple shapes,
 # where the first one is the main shape and the subsequent ones are holes
 @dataclass
 class CompoundShape:
-    component_shapes: List[SimpleShape]
+    component_shapes: List[SimpleShape] = field(default_factory=list)
     attributes: dict[str, str] = field(default_factory=dict)
+    id: str = field(default_factory=str)
+
+@dataclass
+class BoundingBox:
+    min_x: float = 0
+    min_y: float = 0
+    max_x: float = 0
+    max_y: float = 0
 
 
 ##########################################################################################
 # Subpath operations
 
-def compute_bounding_box(shape: SimpleShape) -> Optional[tuple[float, float, float, float]]:
+def compute_bounding_box(shape: SimpleShape) -> Optional[BoundingBox]:
     """
     Computes the bounding box of a shape.
     Args:
@@ -50,11 +59,11 @@ def compute_bounding_box(shape: SimpleShape) -> Optional[tuple[float, float, flo
         return None
 
     min_x = min(p.x for p in shape.points)
-    max_x = max(p.x for p in shape.points)
     min_y = min(p.y for p in shape.points)
+    max_x = max(p.x for p in shape.points)
     max_y = max(p.y for p in shape.points)
 
-    return (min_x, min_y, max_x, max_y)
+    return BoundingBox(min_x, min_y, max_x, max_y)
 
 
 def bounding_box_contains(container: SimpleShape, contained: SimpleShape) -> bool:
@@ -73,10 +82,10 @@ def bounding_box_contains(container: SimpleShape, contained: SimpleShape) -> boo
         logger.warning("bounding_box_contains: at least one of the bounding boxes is None!")
         return False
 
-    return (contained_bbox[0] >= container_bbox[0] and
-            contained_bbox[2] <= container_bbox[2] and
-            contained_bbox[1] >= container_bbox[1] and
-            contained_bbox[3] <= container_bbox[3])
+    return (contained_bbox.min_x >= container_bbox.min_x and
+            contained_bbox.min_y >= container_bbox.min_y and
+            contained_bbox.max_x <= container_bbox.max_x and
+            contained_bbox.max_y <= container_bbox.max_y)
 
 
 ##########################################################################################
@@ -264,10 +273,10 @@ def offset_endpoints(p1: Point, p2: Point, offset_distance: float):
     # (rotated 90 degrees clockwise for one side, counter-clockwise for the other)
     # For clockwise: (dy, -dx) / length
     # For counter-clockwise: (-dy, dx) / length
-    # We'll use the counter-clockwise direction for positive offset_distance
-    # and clockwise for negative offset_distance
-    perp_dx = -dy / length
-    perp_dy = dx / length
+    # We'll use the clockwise direction for positive offset_distance
+    # and counter-clockwise for negative offset_distance
+    perp_dx = dy / length
+    perp_dy = -dx / length
 
     # Calculate the offset vector
     offset_vec_x = perp_dx * offset_distance
@@ -425,6 +434,7 @@ def extract_simple_shapes(path_data_strs: List[str]) -> List[SimpleShape]:
     """
     shapes = []
     current_shape = None
+    current_shape_idx = 1
 
     for path_data_str in path_data_strs:
         # Extract the command and parameters
@@ -438,7 +448,8 @@ def extract_simple_shapes(path_data_strs: List[str]) -> List[SimpleShape]:
                 if current_shape.points[-1].x == current_shape.points[0].x and current_shape.points[-1].y == current_shape.points[0].y:
                     current_shape.points.pop()    # Remove the last point if it's a duplicate of the first point
                 shapes.append(current_shape)    # Store the previous path, if any
-            current_shape = SimpleShape()
+            current_shape = SimpleShape(id=f"path{current_shape_idx}")
+            current_shape_idx += 1
             x, y = map(float, parameters.split())
             current_shape.points.append(Point(x, y))
         elif command in "Ll":
@@ -459,6 +470,11 @@ def extract_simple_shapes(path_data_strs: List[str]) -> List[SimpleShape]:
         else:
             # Unknown command
             logger.warning(f"Unknown command: {command}")
+
+    if current_shape:
+        if current_shape.points[-1].x == current_shape.points[0].x and current_shape.points[-1].y == current_shape.points[0].y:
+            current_shape.points.pop()    # Remove the last point if it's a duplicate of the first point
+        shapes.append(current_shape)    # Store the previous path, if any
 
     return shapes
 
@@ -485,7 +501,7 @@ def to_svg_path(simple_shape: SimpleShape) -> str:
     for key, value in simple_shape.attributes.items():
         attributes += f' {key}="{value}"'
 
-    return f'<path d={path_data}{attributes} />\n'
+    return f'<path id="{simple_shape.id}" d={path_data}{attributes} />\n'
 
 
 ##########################################################################################
@@ -562,6 +578,38 @@ def main(argv: list[str] | None = None) -> int:
             logger.error(f"  Dilation failed: {e}")
             return 4
 
+    # Calculate bounding box for all shapes
+    bounding_box = None # Initialize bounding box as None
+    for simple_shape in simple_shapes:
+        shape_bbox = compute_bounding_box(simple_shape)
+        if bounding_box is None:
+            bounding_box = shape_bbox
+        elif shape_bbox is not None:
+            bounding_box = BoundingBox(
+                min(bounding_box.min_x, shape_bbox.min_x),
+                min(bounding_box.min_y, shape_bbox.min_y),
+                max(bounding_box.max_x, shape_bbox.max_x),
+                max(bounding_box.max_y, shape_bbox.max_y)
+            )
+
+    # Fix up the dimensions and viewbox in preamble
+    if bounding_box:
+        # Expand the bounding box slightly to account for the dilation
+        bounding_box.min_x -= args.dilate / 2
+        bounding_box.min_y -= args.dilate / 2
+        bounding_box.max_x += args.dilate / 2
+        bounding_box.max_y += args.dilate / 2
+
+        # Replace width and height
+        width_str = f"{bounding_box.max_x - bounding_box.min_x}{units}"
+        height_str = f"{bounding_box.max_y - bounding_box.min_y}{units}"
+        preamble = re.sub(r'width="[^"]+"', f'width="{width_str}"', preamble)
+        preamble = re.sub(r'height="[^"]+"', f'height="{height_str}"', preamble)
+
+        # Set the viewBox attribute to the bounding box coordinates
+        preamble = re.sub(r'viewBox="[^"]+"', f'viewBox="{bounding_box.min_x} {bounding_box.min_y} {bounding_box.max_x - bounding_box.min_x} {bounding_box.max_y - bounding_box.min_y}"', preamble)
+
+    # Set SVG stroke width and colors
     stroke_width = f"{args.dilate}{units}"
     stroke_opacity = "0.5"
     color_fill  = "none"
@@ -572,6 +620,7 @@ def main(argv: list[str] | None = None) -> int:
     # Assign styles to outer and inner paths
     for simple_shape in simple_shapes:
         simple_shape.attributes["stroke-width"] = stroke_width
+        simple_shape.attributes["style"] = f'stroke-width:{args.dilate};stroke-dasharray:none'
         simple_shape.attributes["stroke-opacity"] = stroke_opacity
         simple_shape.attributes["fill"] = color_fill
         if is_contained(simple_shape, simple_shapes):
@@ -589,10 +638,28 @@ def main(argv: list[str] | None = None) -> int:
                 path_str = to_svg_path(simple_shape)
                 f.write(path_str)
 
-            f.write("group id='original_paths'>\n")
+            # f.write("<g id='original_paths'>\n")
+            path_node_str_idx = 1
             for path_node_str in path_node_strs:
+                pattern = re.compile(r'id="[^"]+"')
+                if pattern.search(path_node_str):
+                    path_node_str = re.sub(pattern, f'id="orig{path_node_str_idx}"', path_node_str)
+                else:
+                    path_node_str = re.sub(r'^<path ', f'<path id="orig{path_node_str_idx}" ', path_node_str)
+
+                path_node_str = re.sub(r'fill="[^"]+"', f'fill="{color_fill}"', path_node_str)
+                path_node_str = re.sub(r'stroke-width="[^"]+"', f'stroke-width="{stroke_width}" style="stroke-width:{args.dilate};stroke-dasharray:none"', path_node_str)
+                path_node_str = re.sub(r'stroke="[^"]+"', f'stroke="{color_orig}" stroke-opacity="{stroke_opacity}"', path_node_str)
+
+                pattern = re.compile(r'stroke_opacity="[^"]+"')
+                if pattern.search(path_node_str):
+                    path_node_str = re.sub(pattern, 'stroke-opacity="{stroke_opacity}"', path_node_str)
+                else:
+                    path_node_str = re.sub(r'/>\s*$', f'stroke-opacity="{stroke_opacity}" />', path_node_str)
+
                 f.write(path_node_str)
-            f.write("</group>\n")
+                path_node_str_idx += 1
+            # f.write("</g>\n")
 
             f.write(postamble)
 
